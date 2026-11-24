@@ -1,3 +1,13 @@
+```text
+██╗    ██╗██╗██████╗
+██║    ██║██║╚════██╗
+██║ █╗ ██║██║ █████╔╝
+██║███╗██║██║ ╚═══██╗
+╚███╔███╔╝██║██████╔╝
+ ╚══╝╚══╝ ╚═╝╚═════╝
+  i3wm on WSL2 / WSLg
+```
+
 # wi3
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
