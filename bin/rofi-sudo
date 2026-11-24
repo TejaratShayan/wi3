@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# rofi "run" launcher where the chosen command runs as root via sudo.
+# The password is asked in rofi (rofi-askpass). Only DISPLAY is passed to
+# root, so root's HOME stays /root and nothing in your home becomes root-owned.
+ASKPASS="$(command -v rofi-askpass || echo "$HOME/.local/bin/rofi-askpass")"
+exec rofi -show run -display-run " root" \
+  -run-command "env SUDO_ASKPASS=$ASKPASS sudo -A --preserve-env=DISPLAY {cmd}" \
+  -run-shell-command "{terminal} -e env SUDO_ASKPASS=$ASKPASS sudo -A --preserve-env=DISPLAY {cmd}" \
+  -theme-str 'window { border-color: #f38ba8; } prompt { text-color: #f38ba8; } element selected.normal { background-color: #f38ba8; }'

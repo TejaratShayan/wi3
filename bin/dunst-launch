@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Start dunst for THIS i3 session (DISPLAY), or reload it if already running.
+# Scoped by DISPLAY so several i3 instances each get their own dunst.
+for pid in $(pgrep -u "$UID" -x dunst); do
+  if tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -qx "DISPLAY=$DISPLAY"; then
+    exec dunstctl reload
+  fi
+done
+exec dunst

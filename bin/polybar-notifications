@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# polybar module: notification status (bell / do-not-disturb + counts).
+command -v dunstctl >/dev/null && paused=$(dunstctl is-paused 2>/dev/null) || { echo ""; exit 0; }
+if [[ $paused == true ]]; then
+  waiting=$(dunstctl count waiting 2>/dev/null || echo 0)
+  out=$'%{F#f38ba8}%{F-}'
+  ((waiting > 0)) && out+=" $waiting"
+else
+  history=$(dunstctl count history 2>/dev/null || echo 0)
+  out=$'%{F#89b4fa}%{F-}'
+  ((history > 0)) && out+=" %{F#7f849c}$history%{F-}"
+fi
+echo "$out"

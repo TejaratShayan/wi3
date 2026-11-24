@@ -1,0 +1,18 @@
+[Hotkey]
+# Cycle through input methods with the trigger keys
+EnumerateWithTriggerKeys=True
+# Skip first input method while enumerating
+EnumerateSkipFirst=False
+
+[Hotkey/TriggerKeys]
+# Alt+Shift pressed and released on their own (like Windows); Alt+Shift+<key> is untouched
+0=Alt+Shift_L
+1=Shift+Alt_L
+# both Shift keys
+2=Shift+Shift_R
+
+[Behavior]
+# One language state for all windows (like Windows), not per window
+ShareInputState=All
+# Show a small popup with the new language when switching
+ShowInputMethodInformation=True

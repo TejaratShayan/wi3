@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# polybar module: country badge for the current public IP.
+# (Emoji flags can't be used: polybar doesn't shape regional-indicator pairs.)
+# Re-checks when network interfaces/routes change (e.g. VPN up/down),
+# otherwise every 5 minutes.
+#   left-click  -> toggle country name + public IP
+#   right-click -> force refresh
+REFRESH=300
+ISO_JSON=/usr/share/iso-codes/json/iso_3166-1.json
+GLOBE=$''
+show_ip=0; force=1; redraw=0; last_sig=""; last_check=0
+country=""; ip=""; name=""
+
+trap 'show_ip=$((1-show_ip)); redraw=1' USR1
+trap 'force=1' USR2
+
+country_name() {   # "US" -> "United States"
+  [[ -r $ISO_JSON ]] || { echo "$1"; return; }
+  python3 -c 'import json,sys
+for c in json.load(open(sys.argv[1]))["3166-1"]:
+    if c["alpha_2"] == sys.argv[2]:
+        print(c.get("common_name", c["name"])); break
+else:
+    print(sys.argv[2])' "$ISO_JSON" "$1"
+}
+
+lookup() {
+  local j
+  j=$(curl -fsS --max-time 6 https://api.country.is 2>/dev/null) &&
+    country=$(sed -n 's/.*"country":"\([A-Z][A-Z]\)".*/\1/p' <<<"$j") &&
+    ip=$(sed -n 's/.*"ip":"\([^"]*\)".*/\1/p' <<<"$j") && [[ -n $country ]] && return 0
+  country=$(curl -fsS --max-time 6 https://ipinfo.io/country 2>/dev/null | tr -d '[:space:]')
+  ip=$(curl -fsS --max-time 6 https://ipinfo.io/ip 2>/dev/null)
+  [[ $country =~ ^[A-Z]{2}$ ]] || { country=""; ip=""; return 1; }
+}
+
+print() {
+  if [[ -z $country ]]; then
+    echo "%{F#7f849c}$GLOBE ??%{F-}"
+  elif ((show_ip)); then
+    echo "%{F#89b4fa}$GLOBE%{F-} %{B#313244} $country %{B-} $name  %{F#7f849c}$ip%{F-}"
+  else
+    echo "%{F#89b4fa}$GLOBE%{F-} %{B#313244} $country %{B-}"
+  fi
+}
+
+while :; do
+  sig="$(ip -o link show up 2>/dev/null | awk -F': ' '{print $2}' | sort | tr '\n' ' ')$(ip route show default 2>/dev/null)"
+  now=$(date +%s)
+  if ((force)) || [[ $sig != "$last_sig" ]] || ((now - last_check >= REFRESH)); then
+    [[ $sig != "$last_sig" && -n $last_sig ]] && sleep 2   # let a new VPN settle
+    if lookup; then name=$(country_name "$country"); else name=""; fi
+    last_sig=$sig; last_check=$now; force=0; redraw=1
+  fi
+  if ((redraw)); then print; redraw=0; fi
+  sleep 5 & wait $!
+done

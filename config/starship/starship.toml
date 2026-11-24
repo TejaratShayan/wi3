@@ -1,0 +1,75 @@
+# starship prompt — managed by ~/setup-i3-environment
+# Uses FontAwesome glyphs (no Nerd Font needed). Colours match rofi/polybar.
+"$schema" = 'https://starship.rs/config-schema.json'
+add_newline = true
+palette = "mocha"
+
+format = """
+$username$hostname$directory$git_branch$git_status$python$nodejs$rust$golang$docker_context$cmd_duration
+$character"""
+
+[palettes.mocha]
+blue = "#89b4fa"
+red = "#f38ba8"
+green = "#a6e3a1"
+yellow = "#f9e2af"
+mauve = "#cba6f7"
+dim = "#7f849c"
+text = "#cdd6f4"
+
+[username]
+show_always = false
+style_user = "bold mauve"
+format = "[$user]($style)@"
+
+[hostname]
+ssh_only = true
+style = "bold mauve"
+format = "[$hostname]($style) "
+
+[directory]
+style = "bold blue"
+truncation_length = 4
+truncate_to_repo = true
+read_only = " "
+format = "[$path]($style)[$read_only]($read_only_style) "
+
+[git_branch]
+symbol = " "
+style = "green"
+format = "[$symbol$branch]($style) "
+
+[git_status]
+style = "yellow"
+format = "([$all_status$ahead_behind]($style) )"
+
+[python]
+symbol = "py "
+style = "yellow"
+format = "[$symbol$version( \\($virtualenv\\))]($style) "
+
+[nodejs]
+symbol = "node "
+style = "green"
+format = "[$symbol$version]($style) "
+
+[rust]
+symbol = "rs "
+format = "[$symbol$version]($style) "
+
+[golang]
+symbol = "go "
+format = "[$symbol$version]($style) "
+
+[docker_context]
+symbol = " "
+format = "[$symbol$context]($style) "
+
+[cmd_duration]
+min_time = 2000
+style = "dim"
+format = "[ $duration]($style) "
+
+[character]
+success_symbol = "[❯](bold green)"
+error_symbol = "[❯](bold red)"

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# polybar: current input language (fcitx5). Click toggles EN <-> FA.
+command -v fcitx5-remote >/dev/null || { echo ""; exit 0; }
+case "$(fcitx5-remote -n 2>/dev/null)" in
+  keyboard-ir) echo "%{B#313244}%{F#f9e2af} FA %{F-}%{B-}" ;;
+  keyboard-us) echo "%{B#313244} EN %{B-}" ;;
+  "")          echo "%{F#7f849c} -- %{F-}" ;;      # fcitx5 not running
+  *)           echo "%{B#313244} $(fcitx5-remote -n | sed 's/^keyboard-//' | tr a-z A-Z) %{B-}" ;;
+esac

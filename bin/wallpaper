@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# Wallpaper manager for i3 (feh + rofi).
+#   wallpaper pick          choose from ~/Pictures/wallpapers in rofi (with previews)
+#   wallpaper set <file>    set and remember an image
+#   wallpaper random        random image from the folder
+#   wallpaper restore       re-apply the remembered one (used by i3 on start)
+#   wallpaper windows       import the current Windows wallpaper and use it
+#   wallpaper mode <fill|center|max|scale|tile>   change how it's drawn
+set -euo pipefail
+
+DIR="${WALLPAPER_DIR:-$HOME/Pictures/wallpapers}"
+STATE="${XDG_CONFIG_HOME:-$HOME/.config}/wallpaper"
+CURRENT="$STATE/current"          # path of chosen image
+MODE_FILE="$STATE/mode"           # feh mode
+FALLBACK_COLOR="#1e1e2e"
+mkdir -p "$DIR" "$STATE"
+
+mode() { cat "$MODE_FILE" 2>/dev/null || echo fill; }
+
+apply() {
+  local img="$1"
+  [[ -n ${DISPLAY:-} ]] || return 0      # no X (e.g. during install): just remember
+  if [[ -r $img ]]; then
+    feh --no-fehbg --bg-"$(mode)" --image-bg "$FALLBACK_COLOR" "$img"
+  else
+    xsetroot -solid "$FALLBACK_COLOR"
+  fi
+}
+
+list_images() {
+  find -L "$DIR" -maxdepth 2 -type f \
+    \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' -o -iname '*.bmp' \) | sort
+}
+
+set_wp() {
+  local img
+  img="$(readlink -f "$1")"
+  [[ -r $img ]] || { echo "Not readable: $1" >&2; exit 1; }
+  echo "$img" > "$CURRENT"
+  apply "$img"
+}
+
+windows_wp() {
+  local profile src dst
+  profile="$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r')" || true
+  [[ -n $profile ]] || { echo "Can't reach Windows (cmd.exe)" >&2; exit 1; }
+  src="$(wslpath "$profile")/AppData/Roaming/Microsoft/Windows/Themes/TranscodedWallpaper"
+  [[ -r $src ]] || { echo "Windows wallpaper not found: $src" >&2; exit 1; }
+  dst="$DIR/windows-$(date +%Y%m%d).png"
+  cp "$src" "$dst"
+  echo "Imported $dst"
+  set_wp "$dst"
+}
+
+pick() {
+  local -a imgs; mapfile -t imgs < <(list_images)
+  ((${#imgs[@]})) || {
+    notify-send "Wallpaper" "No images in $DIR" 2>/dev/null || echo "No images in $DIR" >&2
+    exit 1
+  }
+  local cur; cur="$(cat "$CURRENT" 2>/dev/null || true)"
+  local sel=0 i
+  for i in "${!imgs[@]}"; do [[ ${imgs[i]} == "$cur" ]] && sel=$i; done
+  local idx
+  idx=$(for f in "${imgs[@]}"; do printf '%s\0icon\x1f%s\n' "$(basename "${f%.*}")" "$f"; done |
+    rofi -dmenu -i -show-icons -format i -selected-row "$sel" -p $' Wallpaper' \
+      -theme-str '
+        window   { width: 900px; }
+        listview { columns: 4; lines: 3; spacing: 10px; }
+        element  { orientation: vertical; padding: 8px; spacing: 6px; }
+        element-icon { size: 180px; horizontal-align: 0.5; }
+        element-text { horizontal-align: 0.5; }') || exit 0
+  set_wp "${imgs[idx]}"
+}
+
+case "${1:-pick}" in
+  pick)    pick ;;
+  set)     set_wp "${2:?usage: wallpaper set <file>}" ;;
+  random)  mapfile -t imgs < <(list_images); ((${#imgs[@]})) || exit 1
+           set_wp "${imgs[RANDOM % ${#imgs[@]}]}" ;;
+  restore) apply "$(cat "$CURRENT" 2>/dev/null || true)" ;;
+  windows) windows_wp ;;
+  mode)    [[ ${2:-} =~ ^(fill|center|max|scale|tile)$ ]] || { echo "modes: fill center max scale tile" >&2; exit 1; }
+           echo "$2" > "$MODE_FILE"; apply "$(cat "$CURRENT" 2>/dev/null || true)" ;;
+  *)       sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

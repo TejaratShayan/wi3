@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# i3/polybar front-end for openfortivpn (company VPN).
+#   fvpn bar        status line for polybar
+#   fvpn toggle     connect if down, disconnect if up
+#   fvpn up | down
+#   fvpn show       show the openfortivpn terminal (log / prompts)
+#   fvpn menu       rofi menu
+# Config: ~/.config/openfortivpn/config if it exists, else /etc/openfortivpn/config
+# (host = ..., port = ..., username = ...). Label on the bar: $FORTI_LABEL.
+#
+# openfortivpn runs in the foreground (it may ask for a password / OTP), so it
+# runs in a floating terminal that is moved to the i3 scratchpad once the
+# tunnel is up. Disconnect sends SIGINT to it (sudo relays it) for a clean stop.
+set -uo pipefail
+
+LABEL="${FORTI_LABEL:-Work}"
+if [[ -n ${FORTI_CONFIG:-} ]]; then CONF="$FORTI_CONFIG"
+elif [[ -r $HOME/.config/openfortivpn/config ]]; then CONF="$HOME/.config/openfortivpn/config"
+else CONF=/etc/openfortivpn/config; fi
+RUN="${FORTI_RUN:-sudo openfortivpn}"       # (overridable for testing)
+# SHA-256 of the company gateway's certificate (it isn't signed by a public CA);
+# openfortivpn refuses to connect unless it matches.
+TRUSTED_CERT="${FORTI_TRUSTED_CERT:-e07b943f1ed034fe9f00373003616ce8e6316f390dd298d7eee9642a8392a7c7}"
+RT="${XDG_RUNTIME_DIR:-/tmp}"
+PIDF="$RT/fvpn.pid"; BUSY="$RT/fvpn-busy"
+CLASS="fvpn-tun"
+ICON=$''
+
+running() { [[ -f $PIDF ]] && kill -0 "$(cat "$PIDF")" 2>/dev/null; }
+ppp_ip()  { ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^ppp/ {sub("/.*","",$4); print $4; exit}'; }
+is_up()   { pgrep -x openfortivpn >/dev/null && [[ -n $(ppp_ip) ]]; }
+
+bar() {
+  command -v openfortivpn >/dev/null || [[ ${FORTI_RUN:-} ]] || { echo ""; return; }
+  if [[ -e $BUSY ]]; then echo "%{F#f9e2af}$ICON $(cat "$BUSY")...%{F-}"
+  elif is_up;       then echo "%{F#a6e3a1}$ICON%{F-} $LABEL"
+  else                   echo "%{F#7f849c}$ICON off%{F-}"; fi
+}
+
+up() {
+  if is_up || running; then notify-send -a VPN "$LABEL VPN" "Already running" & return; fi
+  [[ ${FORTI_RUN:-} || -e $CONF ]] || {
+    notify-send -a VPN -u critical "$LABEL VPN" "No config: create ~/.config/openfortivpn/config" & return; }
+  echo connecting > "$BUSY"
+  local q; printf -v q '%q -c %q' "--trusted-cert=$TRUSTED_CERT" "$CONF"
+  (
+    alacritty --class "$CLASS,$CLASS" -T "$LABEL VPN" -e bash -c "
+      echo -e '\e[1m$LABEL VPN\e[0m  (config: $CONF)'
+      echo 'Enter your sudo password / VPN credentials if asked.'; echo
+      bash -c 'echo \$\$ > \"$PIDF\"; exec $RUN $q'
+      rc=\$?; rm -f \"$PIDF\" \"$BUSY\"
+      echo; echo -e '\e[33mopenfortivpn exited (code '\$rc').\e[0m Any key closes...'; read -rsn1 -t 30"
+    rm -f "$PIDF" "$BUSY"
+  ) >/dev/null 2>&1 &
+  disown
+  # watcher: once the tunnel is up, hide the terminal in the scratchpad
+  (
+    for _ in $(seq 240); do
+      sleep 0.5
+      if is_up; then
+        rm -f "$BUSY"
+        i3-msg -q "[instance=\"$CLASS\"] move scratchpad" 2>/dev/null
+        notify-send -a VPN "$LABEL VPN connected" "IP $(ppp_ip) — Alt+Ctrl+o → Show log"
+        exit 0
+      fi
+      [[ -e $BUSY ]] || exit 0            # terminal closed / failed
+    done
+    rm -f "$BUSY"
+  ) >/dev/null 2>&1 &
+  disown
+}
+
+down() {
+  if ! running; then
+    if pgrep -x openfortivpn >/dev/null; then
+      notify-send -a VPN "$LABEL VPN" "openfortivpn was started elsewhere; stop it there (or: sudo pkill openfortivpn)" &
+    fi
+    return
+  fi
+  echo disconnecting > "$BUSY"
+  kill -INT "$(cat "$PIDF")" 2>/dev/null
+  ( for _ in $(seq 40); do sleep 0.5; running || break; done
+    rm -f "$BUSY"
+    is_up || notify-send -a VPN "$LABEL VPN disconnected" ) >/dev/null 2>&1 &
+  disown
+}
+
+show() { i3-msg -q "[instance=\"$CLASS\"] scratchpad show" 2>/dev/null ||
+         notify-send -a VPN "$LABEL VPN" "No openfortivpn terminal in this i3 session" & }
+
+toggle() { if is_up || running; then down; else up; fi; }
+
+menu() {
+  local state opts choice
+  if is_up; then state="Connected ($(ppp_ip))"; elif running; then state="Connecting..."; else state="Disconnected"; fi
+  if is_up || running; then opts=$'  Disconnect\n  Show log'
+  else opts=$'  Connect\n  Edit config'; fi
+  choice=$(printf '%s\n' "$opts" | rofi -dmenu -i -p "$ICON $LABEL VPN" -mesg "$state" \
+    -theme-str 'window { width: 360px; } listview { lines: 2; }') || exit 0
+  case "$choice" in
+    *Disconnect)  down ;;
+    *Connect)     up ;;
+    *"Show log")  show ;;
+    *"Edit config")
+      mkdir -p "$HOME/.config/openfortivpn"
+      f="$HOME/.config/openfortivpn/config"
+      [[ -e $f ]] || { printf '%s\n' '# openfortivpn config (see: man openfortivpn)' 'host = vpn.company.com' \
+        'port = 443' 'username = YOUR_USER' '# password = ...   (leave out to be asked)' > "$f"; chmod 600 "$f"; }
+      alacritty --class "$CLASS-edit,$CLASS-edit" -e "${EDITOR:-nano}" "$f" & disown ;;
+  esac
+}
+
+case "${1:-bar}" in
+  bar) bar ;; toggle) toggle ;; up) up ;; down) down ;; show) show ;; menu) menu ;;
+  *) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

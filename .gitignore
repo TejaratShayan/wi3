@@ -1,0 +1,21 @@
+# Backup files created by link_file or editors
+*.bak
+*.bak.*
+*~
+*.swp
+*.swo
+
+# Local / machine-specific overrides
+*.local
+.env
+.env.*
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# OS / editor metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

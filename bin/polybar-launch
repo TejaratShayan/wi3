@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# (Re)start polybar on every monitor. Called by i3 on start/restart.
+# Multi-monitor Xephyr (start-i3 --multi) exposes monitors only via Xinerama,
+# so then one bar is placed per Xinerama head by geometry.
+LOG="${XDG_RUNTIME_DIR:-/tmp}/polybar-$(echo "$DISPLAY" | tr -cd '0-9').log"
+
+# stop only the bars of THIS display (other i3 sessions keep theirs)
+bars_here() {
+  local pid
+  for pid in $(pgrep -u "$UID" -x polybar); do
+    tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -qx "DISPLAY=$DISPLAY" && echo "$pid"
+  done
+}
+mapfile -t old < <(bars_here)
+((${#old[@]})) && kill "${old[@]}" 2>/dev/null
+for _ in $(seq 30); do [[ -z $(bars_here) ]] && break; sleep 0.1; done
+: >"$LOG"
+
+mapfile -t HEADS < <(xdpyinfo -ext XINERAMA 2>/dev/null |
+  sed -nE 's/^ *head #[0-9]+: ([0-9]+)x([0-9]+) @ (-?[0-9]+),(-?[0-9]+).*/\1 \2 \3 \4/p')
+
+if ((${#HEADS[@]} > 1)); then
+  for i in "${!HEADS[@]}"; do
+    read -r w h x y <<<"${HEADS[i]}"
+    bar=secondary; ((i == 0)) && bar=main
+    BAR_WIDTH=$w BAR_X=$x PIN_WS=false \
+      polybar --reload "$bar" >>"$LOG" 2>&1 &
+  done
+else
+  for m in $(xrandr --query | awk '/ connected/{print $1}'); do
+    MONITOR=$m polybar --reload main >>"$LOG" 2>&1 &
+  done
+fi

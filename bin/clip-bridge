@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""Two-way CLIPBOARD sync between two X displays.
+
+Used to connect the Xephyr/i3 display with WSLg's display (:0), which WSLg
+already syncs with the Windows clipboard.
+
+    clip-bridge :1 :0
+
+Event-driven (XFixes selection-owner notifications) - no polling.
+Text and PNG images are synced. Data is moved with xclip.
+"""
+import select
+import subprocess
+import sys
+import time
+
+from Xlib import X, display as xdisplay
+from Xlib.ext import xfixes
+
+MAX_BYTES = 50 * 1024 * 1024
+TEXT_TARGETS = ("UTF8_STRING", "text/plain;charset=utf-8", "STRING", "TEXT")
+
+
+def log(*a):
+    print("clip-bridge:", *a, file=sys.stderr, flush=True)
+
+
+def xclip(disp, *args, data=None, timeout=3):
+    cmd = ["xclip", "-display", disp, "-selection", "clipboard", *args]
+    if data is None:
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        return r.stdout if r.returncode == 0 else None
+    # xclip -i forks and keeps serving the selection in the background
+    subprocess.run(cmd, input=data, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=timeout)
+    return b""
+
+
+def read_clip(disp):
+    """Return (target, bytes) or None."""
+    try:
+        targets = xclip(disp, "-o", "-t", "TARGETS")
+    except subprocess.TimeoutExpired:
+        return None
+    if not targets:
+        return None
+    tl = targets.decode(errors="replace").split()
+    if any(t in tl for t in TEXT_TARGETS):
+        target = "UTF8_STRING" if "UTF8_STRING" in tl else next(t for t in TEXT_TARGETS if t in tl)
+    elif "image/png" in tl:
+        target = "image/png"
+    else:
+        return None
+    try:
+        data = xclip(disp, "-o", "-t", target, timeout=5)
+    except subprocess.TimeoutExpired:
+        return None
+    if data is None or len(data) > MAX_BYTES:
+        return None
+    if target != "image/png":
+        target = "UTF8_STRING"
+    return target, data
+
+
+def write_clip(disp, clip):
+    target, data = clip
+    xclip(disp, "-i", "-t", target, data=data)
+
+
+class Side:
+    def __init__(self, name):
+        self.name = name
+        self.d = xdisplay.Display(name)
+        if not self.d.has_extension("XFIXES"):
+            raise SystemExit(f"{name}: XFIXES extension missing")
+        self.d.xfixes_query_version()
+        self.atom = self.d.intern_atom("CLIPBOARD")
+        self.d.xfixes_select_selection_input(
+            self.d.screen().root, self.atom, xfixes.XFixesSetSelectionOwnerNotifyMask)
+        self.d.flush()
+        self.ev = self.d.extension_event.SetSelectionOwnerNotify
+
+    def changed(self):
+        """Drain events; True if the clipboard owner changed."""
+        hit = False
+        while self.d.pending_events():
+            e = self.d.next_event()
+            if (e.type, getattr(e, "sub_code", None)) == tuple(self.ev):
+                if e.owner != X.NONE:
+                    hit = True
+        return hit
+
+
+def main():
+    if len(sys.argv) != 3:
+        raise SystemExit("usage: clip-bridge <display-a> <display-b>")
+    a, b = Side(sys.argv[1]), Side(sys.argv[2])
+    other = {a: b, b: a}
+    last = None   # last clipboard content we synced (either direction)
+
+    def sync(src):
+        nonlocal last
+        time.sleep(0.05)              # give the new owner a moment
+        clip = read_clip(src.name)
+        if clip is None or clip == last:
+            return                    # nothing usable, or our own echo
+        last = clip
+        write_clip(other[src].name, clip)
+
+    sync(b)                           # start with the current outside clipboard
+    log(f"syncing {a.name} <-> {b.name}")
+
+    fds = {a.d.fileno(): a, b.d.fileno(): b}
+    while True:
+        ready, _, _ = select.select(list(fds), [], [])
+        for fd in ready:
+            side = fds[fd]
+            try:
+                if side.changed():
+                    sync(side)
+            except Exception as e:     # display gone (Xephyr closed) -> exit
+                if isinstance(e, (ConnectionError, OSError)) or "Connection" in type(e).__name__:
+                    log(f"{side.name} closed, exiting")
+                    return
+                log("error:", e)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

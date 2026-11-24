@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Google Chrome with GPU-accelerated WebGL inside Xephyr/i3.
+# ANGLE's default GL backend needs GLX (missing in start-i3 --multi), so use
+# ANGLE on EGL instead; with GALLIUM_DRIVER=d3d12 that renders on the real GPU
+# (WSL's D3D12 bridge). Override: CHROME_ANGLE=default google-chrome
+#
+# GPU *compositing* (drawing Chrome's own UI on the GPU) is broken through
+# Xephyr's frame copy (garbled tabs, missing text), so it is disabled;
+# WebGL itself stays GPU-accelerated. Re-enable: CHROME_GPU_COMPOSITING=1
+ANGLE="${CHROME_ANGLE:-gl-egl}"
+args=()
+[[ $ANGLE != default ]] && args+=("--use-angle=$ANGLE")
+[[ ${CHROME_GPU_COMPOSITING:-0} == 1 ]] || args+=("--disable-gpu-compositing")
+exec /usr/bin/google-chrome-stable "${args[@]}" "$@"

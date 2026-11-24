@@ -1,0 +1,21 @@
+/* rofi config — managed by ~/setup-i3-environment */
+configuration {
+    modes:               "drun,run,window";
+    show-icons:          true;
+    icon-theme:          "Papirus-Dark";
+    font:                "JetBrains Mono 11";
+    terminal:            "alacritty";
+    drun-display-format: "{name}";
+    display-drun:        " Apps";
+    display-run:         " Run";
+    display-window:      " Windows";
+    matching:            "fuzzy";
+    sort:                true;
+    sorting-method:      "fzf";
+    case-sensitive:      false;
+    scroll-method:       1;
+    window-format:       "{w}  {c}  {t}";
+    kb-cancel:           "Escape,Control+g,Control+bracketleft";
+}
+
+@theme "~/.config/rofi/themes/dark.rasi"

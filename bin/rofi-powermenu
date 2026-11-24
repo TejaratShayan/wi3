@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Session menu in rofi (opened by the polybar power button / Alt+Shift+e).
+lock=$'\uf023  Lock'; reload=$'\uf021  Reload i3'; restart=$'\uf01e  Restart i3'; logout=$'\uf08b  Exit i3'
+
+choice=$(printf '%s\n' "$lock" "$reload" "$restart" "$logout" |
+  rofi -dmenu -i -p $'\uf011 Session' \
+    -theme-str 'window { width: 320px; border-color: #f38ba8; } listview { lines: 4; } prompt { text-color: #f38ba8; }')
+
+case "$choice" in
+  "$lock")    i3lock -c 1e1e2e ;;
+  "$reload")  i3-msg reload ;;
+  "$restart") i3-msg restart ;;
+  "$logout")  i3-msg exit ;;
+esac

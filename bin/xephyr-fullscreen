@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Toggle fullscreen of the Xephyr window(s) running the current i3 session.
+
+Run from inside i3 (bound to Alt+F11). Uses $DISPLAY (e.g. :2) to find the
+session's Xephyr window(s) on the host display ($I3_HOST_DISPLAY, default :0):
+  - "i3 (:2)"           single / --on / --split instances
+  - "Xephyr on :2.N"    --multi screens (all toggled together)
+
+    xephyr-fullscreen [toggle|on|off]
+"""
+import os, sys, time
+from Xlib import X, display, protocol
+
+mode = (sys.argv[1] if len(sys.argv) > 1 else "toggle").lower()
+sess = os.environ.get("DISPLAY", "").split(".")[0]
+host = os.environ.get("I3_HOST_DISPLAY", ":0")
+if not sess or sess == host:
+    sys.exit("run this inside the i3/Xephyr session")
+
+d = display.Display(host)
+root = d.screen().root
+NAME, UTF8 = d.intern_atom("_NET_WM_NAME"), d.intern_atom("UTF8_STRING")
+STATE, FS = d.intern_atom("_NET_WM_STATE"), d.intern_atom("_NET_WM_STATE_FULLSCREEN")
+wanted = (f"i3 ({sess})", f"Xephyr on {sess}.")
+
+def title(w):
+    try:
+        n = w.get_full_property(NAME, UTF8)
+        return n.value.decode(errors="replace") if n else (w.get_wm_name() or "")
+    except Exception:
+        return ""
+
+def walk(w):
+    try:
+        kids = w.query_tree().children
+    except Exception:
+        return
+    for c in kids:
+        t = title(c)
+        if t == wanted[0] or t.startswith(wanted[1]):
+            yield c
+        else:
+            yield from walk(c)
+
+wins = list(walk(root))
+if not wins:
+    sys.exit(f"no Xephyr window found for {sess} on {host}")
+
+def is_fs(w):
+    p = w.get_full_property(STATE, X.AnyPropertyType)
+    return bool(p) and FS in p.value
+
+# decide once for all windows, based on the first one
+target = {"on": True, "off": False}.get(mode, not is_fs(wins[0]))
+for w in wins:
+    ev = protocol.event.ClientMessage(window=w, client_type=STATE,
+                                      data=(32, [1 if target else 0, FS, 0, 1, 0]))
+    root.send_event(ev, event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask)
+d.sync()

@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# Launch i3 inside Xephyr on WSLg.
+#
+#   start-i3                 one window (default 1920x1080, or $I3_RES)
+#   start-i3 2560x1440       one window, custom size
+#   start-i3 --on 1          one instance maximized on monitor 1
+#                            (monitors numbered left-to-right from 0)
+#   start-i3 --split         one independent i3 instance per monitor
+#   start-i3 --multi         one Xephyr screen per monitor, joined into one
+#                            desktop (Xinerama); i3 gets one output per monitor
+#   --fullscreen, -f         with --on/--split/--multi: fullscreen (no title
+#                            bar) instead of maximized. Alt+F11 toggles later.
+#
+# Note: WSLg mounts /tmp/.X11-unix read-only, so Xephyr can't create a
+# socket file there. We use -nolisten unix and rely on the Linux abstract
+# socket (@/tmp/.X11-unix/XN), which clients use automatically for DISPLAY=:N.
+set -euo pipefail
+
+MULTI=0; ON=""; SPLIT=0; FULL=0; RES="${I3_RES:-1920x1080}"
+while (($#)); do
+  arg="$1"; shift
+  case "$arg" in
+    -m|--multi) MULTI=1 ;;
+    --on)       ON="${1:?--on needs a monitor number}"; shift ;;
+    --split)    SPLIT=1 ;;
+    -f|--fullscreen) FULL=1 ;;
+    [0-9]*x[0-9]*) RES="$arg" ;;
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown argument: $arg" >&2; exit 1 ;;
+  esac
+done
+
+[[ -n "${DISPLAY:-}" ]] || { echo "DISPLAY is not set — is WSLg enabled?" >&2; exit 1; }
+HOST_DISPLAY="$DISPLAY"
+
+# host monitors, left-to-right: "W H X Y"
+host_monitors() {
+  DISPLAY="$HOST_DISPLAY" xrandr --listmonitors |
+    sed -nE 's#^ *[0-9]+: \S+ ([0-9]+)/[0-9]+x([0-9]+)/[0-9]+\+(-?[0-9]+)\+(-?[0-9]+).*#\1 \2 \3 \4#p' |
+    sort -n -k3,3 -k4,4
+}
+
+if ((SPLIT)); then
+  mapfile -t MONS < <(host_monitors)
+  pids=()
+  for i in "${!MONS[@]}"; do
+    if ((FULL)); then "$0" --on "$i" --fullscreen & else "$0" --on "$i" & fi
+    pids+=($!)
+    sleep 2              # let each instance claim its display number
+  done
+  wait "${pids[@]}"
+  exit 0
+fi
+
+PLACE_X=""; PLACE_Y=""
+if [[ -n $ON ]]; then
+  mapfile -t MONS < <(host_monitors)
+  [[ -n ${MONS[ON]:-} ]] || { echo "No monitor $ON (found ${#MONS[@]})" >&2; exit 1; }
+  read -r w h PLACE_X PLACE_Y <<<"${MONS[ON]}"
+  RES="${w}x${h}"
+fi
+
+display_in_use() {
+  [[ -e /tmp/.X$1-lock || -e /tmp/.X11-unix/X$1 ]] ||
+    grep -q "@/tmp/.X11-unix/X$1\$" /proc/net/unix
+}
+N=1
+while display_in_use "$N"; do N=$((N+1)); done
+
+# -no-host-grab: Xephyr's Ctrl+Shift "grab mouse+keyboard" toggle is easy to hit
+# (Ctrl+Shift+C/V in terminals) and then other Xephyr windows get no input.
+XARGS=(":$N" -nolisten unix -ac -br -noreset -no-host-grab)
+I3ARGS=()
+declare -a MON_X MON_Y
+
+if ((MULTI)); then
+  # host monitors, left-to-right: "W H X Y"
+  mapfile -t MONS < <(host_monitors)
+  ((${#MONS[@]} > 1)) || { echo "Only one monitor found; starting normally."; MULTI=0; }
+fi
+
+if ((MULTI)); then
+  # GLX + Xinerama with several screens makes GL clients (alacritty) fail
+  # with BadMatch on CreateWindow; they fall back to EGL without it.
+  # (Composite must stay: polybar requires it.)
+  XARGS+=(+xinerama -extension GLX)
+  for i in "${!MONS[@]}"; do
+    read -r w h x y <<<"${MONS[i]}"
+    if ((!FULL)); then   # leave room for WSLg's frame + title bar
+      w=$((w - ${WSLG_DECOR_W:-12})); h=$((h - ${WSLG_DECOR_H:-33}))
+    fi
+    XARGS+=(-screen "${w}x${h}")
+    MON_X[i]=$x; MON_Y[i]=$y
+    echo "monitor $i: ${w}x${h} at $x,$y"
+  done
+  I3ARGS+=(--force-xinerama)     # RandR in Xephyr only sees the first screen
+elif [[ -n $ON ]] && ((FULL)); then
+  # Fixed size: WSLg sometimes fullscreens a window on a secondary monitor
+  # with the primary monitor's size; -resizeable would make i3's screen
+  # follow that wrong size (content off-screen, repaint problems).
+  XARGS+=(-screen "$RES" -title "i3 (:$N)")
+else
+  XARGS+=(-resizeable -screen "$RES" -title "i3 (:$N)")
+fi
+
+Xephyr "${XARGS[@]}" 2> >(grep -v 'libEGL warning' >&2) &
+XEPHYR_PID=$!
+trap 'kill $XEPHYR_PID 2>/dev/null || true' EXIT
+
+# Wait until Xephyr accepts connections
+for _ in $(seq 50); do
+  DISPLAY=":$N" xdpyinfo &>/dev/null && break
+  kill -0 $XEPHYR_PID 2>/dev/null || { echo "Xephyr exited" >&2; exit 1; }
+  sleep 0.1
+done
+DISPLAY=":$N" xdpyinfo &>/dev/null || { echo "Xephyr failed to start" >&2; exit 1; }
+
+PLACE_MODE=--maximize; ((FULL)) && PLACE_MODE=--fullscreen
+
+# Put each Xephyr screen fullscreen on its monitor
+if ((MULTI)); then
+  for i in "${!MON_X[@]}"; do
+    x-place-window "Xephyr on :$N.$i" "${MON_X[i]}" "${MON_Y[i]}" "$PLACE_MODE" \
+      --display "$HOST_DISPLAY" || echo "could not place screen $i" >&2
+  done
+fi
+
+# Single instance pinned to a monitor
+if [[ -n $PLACE_X ]]; then
+  x-place-window "i3 (:$N)" "$PLACE_X" "$PLACE_Y" "$PLACE_MODE" --display "$HOST_DISPLAY" ||
+    echo "could not place window on monitor $ON" >&2
+fi
+
+# Two-way clipboard sync: i3 (:N) <-> WSLg (:0) <-> Windows
+if command -v clip-bridge >/dev/null; then
+  clip-bridge ":$N" "$HOST_DISPLAY" 2>/dev/null &
+  BRIDGE_PID=$!
+  trap 'kill $BRIDGE_PID $XEPHYR_PID 2>/dev/null || true' EXIT
+fi
+
+export I3_HOST_DISPLAY="$HOST_DISPLAY"   # for xephyr-fullscreen (Alt+F11)
+export DISPLAY=":$N"
+unset WAYLAND_DISPLAY          # make apps use X inside Xephyr, not WSLg's Wayland
+export XDG_SESSION_TYPE=x11
+# xdg-open falls back to "WSL mode" (opens links/files in Windows) when it
+# doesn't recognise the desktop. X-Generic makes it use the Linux defaults
+# (mimeapps.list), so e.g. VS Code login opens Linux Chrome inside i3 and the
+# vscode:// callback comes back to VS Code.
+export XDG_CURRENT_DESKTOP=X-Generic
+export XDG_SESSION_DESKTOP=i3
+# Persian/English typing through the fcitx5 input method (module 10-keyboard)
+export GTK_IM_MODULE=fcitx QT_IM_MODULE=fcitx XMODIFIERS=@im=fcitx SDL_IM_MODULE=fcitx
+# Real GPU through WSL's D3D12 bridge (otherwise Mesa uses llvmpipe = CPU,
+# and Chrome disables WebGL). See modules/13-gpu.sh.
+if [[ -e /dev/dxg && -e /usr/lib/wsl/lib/libd3d12.so ]]; then
+  export GALLIUM_DRIVER=d3d12
+fi
+export TERMINAL=alacritty
+
+# (filter i3's expected warning about --force-xinerama)
+dbus-launch --exit-with-session i3 "${I3ARGS[@]}" \
+  2> >(grep -v 'Using Xinerama instead of RandR' >&2)

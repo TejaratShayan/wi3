@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Screenshot tool for i3 (maim + slop, flameshot for annotating).
+# Every shot is saved to ~/Pictures/screenshots AND copied to the clipboard
+# (the clip-bridge passes it on to Windows).
+#   screenshot area | full | window      capture now
+#   screenshot full 5                     capture after 5 s delay
+#   screenshot annotate                   flameshot editor (draw, arrows, blur...)
+#   screenshot menu                       rofi menu with all options
+set -euo pipefail
+
+DIR="${SCREENSHOT_DIR:-$HOME/Pictures/screenshots}"
+mkdir -p "$DIR"
+FILE="$DIR/$(date +%Y-%m-%d_%H-%M-%S).png"
+# slop selection style: blue highlight matching the theme
+SLOP=(-s -u -l -b 2 -c 0.537,0.706,0.980,0.25)
+
+notify_done() {
+  local f="$1"
+  ( action=$(notify-send -a Screenshot -i "$f" -A open=Open -A folder="Show in Explorer" \
+      "Screenshot saved" "$(basename "$f") — copied to clipboard" 2>/dev/null || true)
+    case "$action" in
+      open)   feh --scale-down --auto-zoom "$f" ;;
+      folder) explorer.exe "/select,$(wslpath -w "$f")" ;;
+    esac ) >/dev/null 2>&1 &
+  disown
+}
+
+countdown() {
+  local s="${1:-0}"
+  ((s > 0)) || return 0
+  notify-send -a Screenshot -t $((s * 1000)) "Screenshot in ${s}s" 2>/dev/null || true
+  sleep "$s"
+}
+
+capture() {   # capture <mode> [delay]
+  local mode="$1" delay="${2:-0}"
+  case "$mode" in
+    area)   maim "${SLOP[@]}" -d "$delay" "$FILE" || exit 0 ;;   # Esc cancels
+    full)   countdown "$delay"; maim -u "$FILE" ;;
+    window) countdown "$delay"; maim -u -i "$(xdotool getactivewindow)" "$FILE" ;;
+    *)      echo "unknown mode: $mode" >&2; exit 1 ;;
+  esac
+  xclip -selection clipboard -t image/png -i "$FILE"
+  notify_done "$FILE"
+}
+
+annotate() {
+  flameshot gui --path "$DIR" --clipboard
+}
+
+menu() {
+  local opts=(
+    $'  Area'
+    $'  Full screen'
+    $'  Active window'
+    $'  Area + annotate'
+    $'  Full screen in 5s'
+    $'  Active window in 5s'
+    $'  Open screenshots folder'
+  )
+  local i
+  i=$(printf '%s\n' "${opts[@]}" | rofi -dmenu -i -format i -p $' Screenshot' \
+        -theme-str 'window { width: 380px; } listview { lines: 7; }') || exit 0
+  sleep 0.2   # let rofi disappear before capturing
+  case "$i" in
+    0) capture area ;;
+    1) capture full ;;
+    2) capture window ;;
+    3) annotate ;;
+    4) capture full 5 ;;
+    5) capture window 5 ;;
+    6) explorer.exe "$(wslpath -w "$DIR")" >/dev/null 2>&1 || true ;;
+  esac
+}
+
+case "${1:-menu}" in
+  area|full|window) capture "$1" "${2:-0}" ;;
+  annotate)         annotate ;;
+  menu)             menu ;;
+  *)                sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# i3/polybar front-end for ~/vless-tun.sh (or $VLESS_SCRIPT).
+#   vpn bar            one status line for polybar
+#   vpn toggle         connect if down, disconnect if up
+#   vpn up [--kill-switch] | down | status | log    (run in a floating terminal)
+#   vpn menu           rofi menu
+# Connect/disconnect need sudo; they run in a small floating terminal so the
+# password is typed once and the script's output is visible.
+set -uo pipefail
+
+SCRIPT="${VLESS_SCRIPT:-$HOME/vless-tun.sh}"
+IFACE=vless-tun
+LINK_FILE="$HOME/.config/vless-tun/link"
+BUSY="${XDG_RUNTIME_DIR:-/tmp}/vpn-busy"
+TITLE="vpn-tun"
+SHIELD=$''
+
+is_up() { ip link show "$IFACE" >/dev/null 2>&1; }
+
+server_name() {
+  [[ -r $LINK_FILE ]] || { echo "server"; return; }
+  python3 -I -c 'import sys; from urllib.parse import urlsplit, unquote
+print(unquote(urlsplit(open(sys.argv[1]).read().strip()).fragment) or "server")' "$LINK_FILE" 2>/dev/null || echo server
+}
+
+bar() {
+  [[ -x $SCRIPT ]] || { echo ""; return; }
+  if [[ -e $BUSY ]]; then
+    echo "%{F#f9e2af}$SHIELD $(cat "$BUSY" 2>/dev/null)...%{F-}"
+  elif is_up; then
+    local n; n="$(server_name)"; ((${#n} > 18)) && n="${n:0:17}…"
+    echo "%{F#a6e3a1}$SHIELD%{F-} $n"
+  else
+    echo "%{F#7f849c}$SHIELD off%{F-}"
+  fi
+}
+
+# run_term <label> <script args...>  — run vless-tun.sh in a floating terminal
+run_term() {
+  local label="$1"; shift
+  [[ -x $SCRIPT ]] || { notify-send -u critical "VPN" "Script not found: $SCRIPT" & exit 1; }
+  [[ -e $BUSY ]] && { notify-send "VPN" "Already busy: $(cat "$BUSY")" & exit 0; }
+  echo "$label" > "$BUSY"
+  local q; printf -v q '%q ' "$SCRIPT" "$@"
+  (
+    alacritty --class "$TITLE,$TITLE" -T "$TITLE" -e bash -c "
+      $q; rc=\$?
+      rm -f \"$BUSY\"
+      if [[ \$rc -eq 0 ]]; then
+        printf '\n\e[32mDone.\e[0m Closing in 4s (any key closes now)...'; read -rsn1 -t 4
+      else
+        printf '\n\e[31mFailed (exit \$rc).\e[0m Press any key to close...'; read -rsn1
+      fi"
+    rm -f "$BUSY"          # also if the window was closed early
+    case "$label" in
+      connecting)    if is_up; then notify-send -a VPN "VPN connected" "$(server_name)"
+                     else notify-send -a VPN -u critical "VPN" "Connection failed"; fi ;;
+      disconnecting) is_up || notify-send -a VPN "VPN disconnected" "Direct connection" ;;
+    esac
+  ) >/dev/null 2>&1 &
+  disown
+}
+
+up()     { run_term connecting "up" "$@"; }
+down()   { run_term disconnecting "down"; }
+toggle() { if is_up; then down; else up; fi; }
+
+menu() {
+  local state opts choice
+  if is_up; then state="Connected: $(server_name)"; else state="Disconnected"; fi
+  if is_up; then
+    opts=$'  Disconnect\n  Reconnect\n  Status\n  Log'
+  else
+    opts=$'  Connect\n  Connect with kill switch\n  Status\n  Log'
+  fi
+  choice=$(printf '%s\n' "$opts" | rofi -dmenu -i -p "$SHIELD VPN" -mesg "$state" \
+    -theme-str 'window { width: 380px; } listview { lines: 4; }') || exit 0
+  case "$choice" in
+    *Disconnect)                down ;;
+    *Reconnect|*Connect)        up ;;
+    *"Connect with kill switch") up --kill-switch ;;
+    *Status) run_term status "status" ;;
+    *Log)    rm -f "$BUSY"; alacritty --class "$TITLE,$TITLE" -T "$TITLE" -e "$SCRIPT" log & disown ;;
+  esac
+}
+
+case "${1:-bar}" in
+  bar)    bar ;;
+  toggle) toggle ;;
+  up)     shift; up "$@" ;;
+  down)   down ;;
+  status) run_term status "status" ;;
+  log)    alacritty --class "$TITLE,$TITLE" -T "$TITLE" -e "$SCRIPT" log & disown ;;
+  menu)   menu ;;
+  *)      sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

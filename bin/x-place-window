@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Move a window on the host X display (WSLg :0) and optionally fullscreen it.
+
+    x-place-window "<title substring>" X Y [--fullscreen | --maximize] [--display :0]
+
+Used by start-i3 --multi to put each Xephyr screen on its own monitor
+(Xephyr's own -output/-fullscreen crash with +xinerama, and WSLg ignores
+initial positions).
+"""
+import argparse, sys, time
+from Xlib import X, display, protocol
+
+p = argparse.ArgumentParser()
+p.add_argument("title"); p.add_argument("x", type=int); p.add_argument("y", type=int)
+p.add_argument("--fullscreen", action="store_true")
+p.add_argument("--maximize", action="store_true")
+p.add_argument("--display", default=":0")
+p.add_argument("--timeout", type=float, default=5)
+a = p.parse_args()
+
+d = display.Display(a.display)
+root = d.screen().root
+NAME, UTF8 = d.intern_atom("_NET_WM_NAME"), d.intern_atom("UTF8_STRING")
+
+def title(w):
+    try:
+        n = w.get_full_property(NAME, UTF8)
+        return n.value.decode(errors="replace") if n else (w.get_wm_name() or "")
+    except Exception:
+        return ""
+
+def find(w):
+    try:
+        kids = w.query_tree().children
+    except Exception:
+        return None
+    for c in kids:
+        if a.title in title(c):
+            return c
+        r = find(c)
+        if r:
+            return r
+
+deadline = time.time() + a.timeout
+win = None
+while not win and time.time() < deadline:
+    win = find(root)
+    if not win:
+        time.sleep(0.1)
+if not win:
+    sys.exit(f"window '{a.title}' not found")
+
+win.configure(x=a.x, y=a.y)
+d.sync()
+def set_state(*names):
+    time.sleep(0.3)
+    st = d.intern_atom("_NET_WM_STATE")
+    atoms = [d.intern_atom(n) for n in names] + [0]
+    ev = protocol.event.ClientMessage(window=win, client_type=st,
+                                      data=(32, [1, atoms[0], atoms[1], 1, 0]))
+    root.send_event(ev, event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask)
+    d.sync()
+
+if a.fullscreen:
+    set_state("_NET_WM_STATE_FULLSCREEN")
+elif a.maximize:
+    set_state("_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ")

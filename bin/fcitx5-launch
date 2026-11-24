@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Start fcitx5 (Persian/English input) for THIS i3 session, once per DISPLAY.
+for pid in $(pgrep -u "$UID" -x fcitx5); do
+  tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -qx "DISPLAY=$DISPLAY" && exit 0
+done
+exec fcitx5 -d --replace >/dev/null 2>&1

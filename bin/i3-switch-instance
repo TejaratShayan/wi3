@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Focus another i3 instance (start-i3 --split / --on) on the Windows side.
+
+    i3-switch-instance [next|prev|<display>]     e.g. next, prev, :2
+
+Instances are ordered left-to-right by where their Xephyr window is.
+Asks WSLg (host display, $I3_HOST_DISPLAY or :0) to activate the window
+via _NET_ACTIVE_WINDOW.
+"""
+import os, re, sys
+from Xlib import X, display, protocol
+
+arg = sys.argv[1] if len(sys.argv) > 1 else "next"
+me = os.environ.get("DISPLAY", "").split(".")[0]
+d = display.Display(os.environ.get("I3_HOST_DISPLAY", ":0"))
+root = d.screen().root
+NAME, UTF8 = d.intern_atom("_NET_WM_NAME"), d.intern_atom("UTF8_STRING")
+ACT = d.intern_atom("_NET_ACTIVE_WINDOW")
+pat = re.compile(r"^i3 \((:\d+)\)$")
+
+def title(w):
+    try:
+        p = w.get_full_property(NAME, UTF8)
+        return p.value.decode(errors="replace") if p else (w.get_wm_name() or "")
+    except Exception:
+        return ""
+
+found = []          # (x, y, display, window)
+def walk(w):
+    try:
+        kids = w.query_tree().children
+    except Exception:
+        return
+    for c in kids:
+        m = pat.match(title(c))
+        if m:
+            g = c.translate_coords(root, 0, 0)
+            found.append((-g.x, -g.y, m.group(1), c))
+        else:
+            walk(c)
+walk(root)
+found.sort(key=lambda t: (t[0], t[1]))
+if len(found) < 2:
+    sys.exit("only one i3 instance is running")
+
+names = [f[2] for f in found]
+if arg.startswith(":"):
+    if arg not in names:
+        sys.exit(f"no instance {arg} (running: {' '.join(names)})")
+    target = found[names.index(arg)]
+else:
+    i = names.index(me) if me in names else 0
+    step = -1 if arg == "prev" else 1
+    target = found[(i + step) % len(found)]
+
+w = target[3]
+ev = protocol.event.ClientMessage(window=w, client_type=ACT,
+                                  data=(32, [2, X.CurrentTime, 0, 0, 0]))
+root.send_event(ev, event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask)
+w.configure(stack_mode=X.Above)
+d.sync()

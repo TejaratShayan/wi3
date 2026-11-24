@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Notification center in rofi: DND toggle, clear, and dunst history.
+Selecting a history entry shows that notification again."""
+import json, subprocess
+
+def dctl(*a):
+    return subprocess.run(["dunstctl", *a], capture_output=True, text=True).stdout.strip()
+
+paused = dctl("is-paused") == "true"
+try:
+    hist = json.loads(dctl("history"))["data"][0]
+except Exception:
+    hist = []
+
+def val(n, k):
+    return n.get(k, {}).get("data", "")
+
+dnd = ("  Turn notifications ON" if paused else "  Do not disturb")
+lines = [dnd, "  Clear history"]
+ids = [None, None]
+for n in hist:
+    body = " ".join(str(val(n, "body")).split())
+    if len(body) > 70:
+        body = body[:67] + "..."
+    text = f"{val(n, 'appname')}: {val(n, 'summary')}"
+    if body:
+        text += f"  —  {body}"
+    lines.append(text)
+    ids.append(val(n, "id"))
+if not hist:
+    lines.append("(no notifications)")
+    ids.append(None)
+
+r = subprocess.run(
+    ["rofi", "-dmenu", "-i", "-markup-rows", "false", "-format", "i",
+     "-p", " Notifications",
+     "-theme-str", "window { width: 720px; } listview { lines: 10; }"],
+    input="\n".join(lines), capture_output=True, text=True)
+if r.returncode != 0 or not r.stdout.strip():
+    raise SystemExit
+i = int(r.stdout.strip())
+
+if i == 0:
+    dctl("set-paused", "toggle")
+elif i == 1:
+    dctl("history-clear")
+elif ids[i] is not None:
+    dctl("history-pop", str(ids[i]))
